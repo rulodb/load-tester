@@ -1,0 +1,35 @@
+{
+  "name": "@rulodb/load-tester",
+  "version": "1.0.0",
+  "description": "Load testing suite for RuloDB",
+  "module": "src/runner.ts",
+  "private": true,
+  "scripts": {
+    "lint": "eslint src --ext .ts",
+    "format": "prettier --write src public",
+    "test": "bun src/runner.ts",
+    "dashboard": "bun src/dashboard.ts",
+    "stress": "bun src/stress-runner.ts"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3.3.1",
+    "@eslint/js": "^9.28.0",
+    "@types/bun": "latest",
+    "@types/minimist": "^1.2.5",
+    "@typescript-eslint/eslint-plugin": "^8.34.0",
+    "@typescript-eslint/parser": "^8.34.0",
+    "eslint": "^9.28.0",
+    "eslint-plugin-simple-import-sort": "^12.1.1",
+    "prettier": "^3.5.3"
+  },
+  "optionalDependencies": {
+    "rethinkdb-ts": "^2.7.0"
+  },
+  "peerDependencies": {
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "@rulodb/rulodb": "^0.0.5",
+    "minimist": "^1.2.8"
+  }
+}

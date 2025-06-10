@@ -1,0 +1,755 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Load Test Visualizer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      rel="icon"
+      type="image/png"
+      sizes="32x32"
+      href="https://mintlify.s3-us-west-1.amazonaws.com/rulodb/_generated/favicon/favicon-32x32.png?v=3"
+    />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom"></script>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <h1>Load Test Visualizer</h1>
+        <p>Compare and analyze performance metrics</p>
+      </div>
+
+      <div class="controls">
+        <h2>Test Results</h2>
+        <div id="fileGrid" class="file-grid">
+          <!-- Files will be loaded here -->
+        </div>
+        <button id="compareBtn" class="compare-btn" disabled>Compare Selected Results</button>
+
+        <div id="adapterFilter" class="adapter-filter" style="display: none">
+          <h3>Filter by Adapters</h3>
+          <div id="adapterCheckboxes" class="adapter-checkboxes">
+            <!-- Adapter checkboxes will be loaded here -->
+          </div>
+        </div>
+      </div>
+
+      <div id="loadingIndicator" class="loading">Loading...</div>
+
+      <div id="errorMessage" class="error" style="display: none">
+        <!-- Error messages will appear here -->
+      </div>
+
+      <div id="dashboardContent" style="display: none">
+        <div class="summary-cards">
+          <div class="summary-row">
+            <div class="summary-card">
+              <h4>Operations</h4>
+              <div id="operationsSummary"></div>
+            </div>
+            <div class="summary-card">
+              <h4>Documents</h4>
+              <div id="documentsSummary"></div>
+            </div>
+          </div>
+          <div class="summary-row">
+            <div class="summary-card">
+              <h4>Configuration</h4>
+              <div id="configSummary"></div>
+            </div>
+            <div class="summary-card">
+              <h4>Errors</h4>
+              <div id="errorSummary"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="charts-container">
+          <div class="chart-card">
+            <h3>Latency</h3>
+            <div class="chart-controls">
+              <button onclick="dashboard.resetZoom('latency')" class="chart-btn">Reset Zoom</button>
+            </div>
+            <div class="chart-wrapper">
+              <canvas id="latencyChart"></canvas>
+            </div>
+          </div>
+          <div class="chart-card">
+            <h3>Operations & Documents Per Second</h3>
+            <div class="chart-controls">
+              <button onclick="dashboard.resetZoom('qps')" class="chart-btn">Reset Zoom</button>
+            </div>
+            <div class="chart-wrapper">
+              <canvas id="qpsChart"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <div class="charts-container">
+          <div class="chart-card">
+            <h3>Throughput</h3>
+            <div class="chart-controls">
+              <button onclick="dashboard.resetZoom('throughput')" class="chart-btn">Reset Zoom</button>
+            </div>
+            <div class="chart-wrapper">
+              <canvas id="throughputChart"></canvas>
+            </div>
+          </div>
+          <div class="chart-card">
+            <h3>Response Time Distribution</h3>
+            <div class="chart-controls">
+              <button onclick="dashboard.resetZoom('histogram')" class="chart-btn">Reset Zoom</button>
+            </div>
+            <div class="chart-wrapper">
+              <canvas id="histogramChart"></canvas>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="noDataMessage" class="no-data" style="display: none">
+        No test results found. Run some load tests first.
+      </div>
+    </div>
+
+    <script>
+      class Dashboard {
+        constructor() {
+          this.selectedFiles = new Set();
+          this.fileData = [];
+          this.charts = {};
+          this.selectedAdapters = new Set();
+          this.init();
+        }
+
+        async init() {
+          await this.loadFiles();
+          this.setupEventListeners();
+        }
+
+        async loadFiles() {
+          try {
+            const response = await fetch('/api/results');
+            const files = await response.json();
+
+            if (files.length === 0) {
+              this.showNoData();
+              return;
+            }
+
+            this.fileData = files;
+            this.renderFileGrid();
+            this.hideLoading();
+          } catch (error) {
+            this.showError('Failed to load test results');
+          }
+        }
+
+        renderFileGrid() {
+          const grid = document.getElementById('fileGrid');
+          grid.innerHTML = '';
+
+          this.fileData.forEach((file) => {
+            const fileItem = document.createElement('div');
+            fileItem.className = 'file-item';
+            fileItem.dataset.filename = file.name;
+
+            const date = new Date(file.modified).toLocaleDateString();
+            const size = (file.size / 1024).toFixed(1) + ' KB';
+
+            fileItem.innerHTML = `
+              <div class="file-name">${file.name}</div>
+              <div class="file-meta">
+                <span>${date}</span>
+                <span>${size}</span>
+              </div>
+            `;
+
+            fileItem.addEventListener('click', () => this.toggleFileSelection(file.name));
+            grid.appendChild(fileItem);
+          });
+        }
+
+        toggleFileSelection(filename) {
+          const fileItem = document.querySelector(`[data-filename="${filename}"]`);
+
+          if (this.selectedFiles.has(filename)) {
+            this.selectedFiles.delete(filename);
+            fileItem.classList.remove('selected');
+          } else {
+            this.selectedFiles.add(filename);
+            fileItem.classList.add('selected');
+          }
+
+          this.updateCompareButton();
+        }
+
+        updateCompareButton() {
+          const compareBtn = document.getElementById('compareBtn');
+          const count = this.selectedFiles.size;
+
+          compareBtn.disabled = count === 0;
+          compareBtn.textContent =
+            count > 0 ? `Compare ${count} Result${count > 1 ? 's' : ''}` : 'Compare Selected Results';
+        }
+
+        setupEventListeners() {
+          document.getElementById('compareBtn').addEventListener('click', () => {
+            this.compareResults();
+          });
+        }
+
+        async compareResults() {
+          if (this.selectedFiles.size === 0) return;
+
+          try {
+            const results = [];
+            for (const filename of this.selectedFiles) {
+              const response = await fetch(`/api/result/${filename}`);
+              const data = await response.json();
+              results.push({ filename, data });
+            }
+
+            this.currentResults = results;
+            this.renderAdapterFilter(results);
+            this.renderComparison(results);
+            this.showDashboard();
+          } catch (error) {
+            this.showError('Failed to load result data');
+          }
+        }
+
+        renderComparison(results) {
+          // Flatten results to handle both single adapter and multi-adapter files
+          const flattenedResults = this.flattenResults(results);
+          // Filter by selected adapters
+          const filteredResults = this.filterByAdapters(flattenedResults);
+          this.renderSummaryCards(filteredResults);
+          this.renderCharts(filteredResults);
+        }
+
+        flattenResults(results) {
+          const flattened = [];
+          results.forEach(({ filename, data }) => {
+            if (Array.isArray(data)) {
+              // Multi-adapter result file
+              data.forEach((adapterResult) => {
+                flattened.push({
+                  filename: `${this.getShortName(filename)}-${adapterResult.adapter}`,
+                  data: adapterResult
+                });
+              });
+            } else {
+              // Single adapter result file
+              flattened.push({
+                filename: this.getShortName(filename),
+                data: data
+              });
+            }
+          });
+          return flattened;
+        }
+
+        filterByAdapters(results) {
+          if (this.selectedAdapters.size === 0) {
+            return results;
+          }
+
+          return results.filter(({ filename, data }) => {
+            // Extract adapter name from filename or data
+            const adapterName = data.adapter || this.extractAdapterFromFilename(filename);
+            return this.selectedAdapters.has(adapterName);
+          });
+        }
+
+        extractAdapterFromFilename(filename) {
+          // Try to extract adapter name from filename patterns like "test-rethinkdb" or "filename-rulodb"
+          const parts = filename.toLowerCase().split('-');
+          for (const part of parts) {
+            if (part.includes('rethink') || part === 'rethinkdb') return 'rethinkdb';
+            if (part.includes('rulo') || part === 'rulodb') return 'rulodb';
+          }
+          return 'unknown';
+        }
+
+        renderAdapterFilter(results) {
+          const adapters = new Set();
+
+          // Collect all unique adapters from results
+          results.forEach(({ filename, data }) => {
+            if (Array.isArray(data)) {
+              data.forEach((adapterResult) => {
+                adapters.add(adapterResult.adapter);
+              });
+            } else {
+              adapters.add(data.adapter || this.extractAdapterFromFilename(filename));
+            }
+          });
+
+          const adapterFilter = document.getElementById('adapterFilter');
+          const adapterCheckboxes = document.getElementById('adapterCheckboxes');
+          adapterCheckboxes.innerHTML = '';
+
+          if (adapters.size > 1) {
+            adapterFilter.style.display = 'block';
+
+            // Create checkboxes for each adapter
+            adapters.forEach((adapter) => {
+              const label = document.createElement('label');
+              label.className = 'adapter-checkbox';
+
+              const checkbox = document.createElement('input');
+              checkbox.type = 'checkbox';
+              checkbox.value = adapter;
+              checkbox.checked = this.selectedAdapters.has(adapter);
+              checkbox.addEventListener('change', () => this.toggleAdapter(adapter));
+
+              const span = document.createElement('span');
+              span.textContent = adapter;
+
+              label.appendChild(checkbox);
+              label.appendChild(span);
+              adapterCheckboxes.appendChild(label);
+            });
+          } else {
+            adapterFilter.style.display = 'none';
+          }
+        }
+
+        toggleAdapter(adapter) {
+          if (this.selectedAdapters.has(adapter)) {
+            this.selectedAdapters.delete(adapter);
+          } else {
+            this.selectedAdapters.add(adapter);
+          }
+
+          // Re-render comparison with new filter
+          if (this.currentResults) {
+            this.renderComparison(this.currentResults);
+          }
+        }
+
+        renderSummaryCards(results) {
+          const operationsDiv = document.getElementById('operationsSummary');
+          const documentsDiv = document.getElementById('documentsSummary');
+          const configDiv = document.getElementById('configSummary');
+          const errorDiv = document.getElementById('errorSummary');
+
+          // Operations Summary
+          let opsHtml = '';
+          results.forEach(({ filename, data }) => {
+            opsHtml += `
+              <div class="metric-row">
+                <span class="metric-label">${filename}</span>
+                <span class="metric-value">${this.formatWithCommas(data.qps?.toFixed(0))} OPS</span>
+              </div>
+            `;
+          });
+          operationsDiv.innerHTML = opsHtml;
+
+          // Documents Summary
+          let docsHtml = '';
+          results.forEach(({ filename, data }) => {
+            docsHtml += `
+              <div class="metric-row">
+                <span class="metric-label">${filename}</span>
+                <span class="metric-value">${this.formatWithCommas(data.documentsPerSecond?.toFixed(0))} DPS</span>
+              </div>
+              <div class="metric-row">
+                <span class="metric-label"></span>
+                <span class="metric-value">${this.formatWithCommas(data.documentsAffected)} docs</span>
+              </div>
+            `;
+          });
+          documentsDiv.innerHTML = docsHtml;
+
+          // Config Summary
+          const firstResult = results[0].data;
+          configDiv.innerHTML = `
+            <div class="metric-row">
+              <span class="metric-label">Operations</span>
+              <span class="metric-value">${this.formatWithCommas(firstResult.requests) || 'N/A'}</span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">Batch Size</span>
+              <span class="metric-value">${this.formatWithCommas(firstResult.batchSize) || 'N/A'}</span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">Concurrency</span>
+              <span class="metric-value">${firstResult.concurrency || 'N/A'}</span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">Scenario</span>
+              <span class="metric-value">${firstResult.scenario || 'N/A'}</span>
+            </div>
+          `;
+
+          // Error Summary
+          let errorHtml = '';
+          results.forEach(({ filename, data }) => {
+            errorHtml += `
+              <div class="metric-row">
+                <span class="metric-label">${filename}</span>
+                <span class="metric-value">${this.formatWithCommas(data.errors || 0)}</span>
+              </div>
+            `;
+          });
+          errorDiv.innerHTML = errorHtml;
+        }
+
+        renderCharts(results) {
+          this.destroyExistingCharts();
+
+          this.renderLatencyChart(results);
+          this.renderQPSChart(results);
+          this.renderThroughputChart(results);
+          this.renderHistogramChart(results);
+        }
+
+        resetZoom(chartType) {
+          const chart = this.charts[chartType];
+          if (chart && chart.resetZoom) {
+            chart.resetZoom();
+          }
+        }
+
+        renderLatencyChart(results) {
+          const ctx = document.getElementById('latencyChart').getContext('2d');
+          const datasets = results.map(({ filename, data }, index) => {
+            return {
+              label: filename,
+              data: [data.min || 0, data.p50 || 0, data.average || 0, data.p95 || 0, data.p99 || 0, data.max || 0],
+              backgroundColor: this.getColor(index),
+              borderWidth: 0
+            };
+          });
+
+          this.charts.latency = new Chart(ctx, {
+            type: 'bar',
+            data: {
+              labels: ['Min', 'P50', 'Avg', 'P95', 'P99', 'Max'],
+              datasets
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              plugins: {
+                legend: {
+                  position: 'bottom'
+                },
+                zoom: {
+                  zoom: {
+                    wheel: {
+                      enabled: false
+                    },
+                    drag: {
+                      enabled: true,
+                      modifierKey: null,
+                      backgroundColor: 'rgba(54, 162, 235, 0.2)',
+                      borderColor: 'rgba(54, 162, 235, 0.8)',
+                      borderWidth: 2
+                    },
+                    pinch: {
+                      enabled: true
+                    },
+                    mode: 'xy'
+                  },
+                  pan: {
+                    enabled: true,
+                    mode: 'xy',
+                    modifierKey: 'shift'
+                  }
+                }
+              },
+              scales: {
+                y: {
+                  beginAtZero: true,
+                  title: {
+                    display: true,
+                    text: 'ms'
+                  }
+                }
+              }
+            }
+          });
+        }
+
+        renderQPSChart(results) {
+          const ctx = document.getElementById('qpsChart').getContext('2d');
+
+          const opsDatasets = results.map(({ filename, data }, index) => {
+            return {
+              label: `${filename} - Operations/sec`,
+              data: [data.qps || 0, 0],
+              backgroundColor: this.getColor(index),
+              borderWidth: 0
+            };
+          });
+
+          const docsDatasets = results.map(({ filename, data }, index) => {
+            return {
+              label: `${filename} - Documents/sec`,
+              data: [0, data.documentsPerSecond || 0],
+              backgroundColor: this.getColor(index + results.length),
+              borderWidth: 0
+            };
+          });
+
+          this.charts.qps = new Chart(ctx, {
+            type: 'bar',
+            data: {
+              labels: ['Operations/sec', 'Documents/sec'],
+              datasets: [...opsDatasets, ...docsDatasets]
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              plugins: {
+                legend: {
+                  position: 'bottom'
+                },
+                zoom: {
+                  zoom: {
+                    wheel: {
+                      enabled: false
+                    },
+                    drag: {
+                      enabled: true,
+                      modifierKey: null,
+                      backgroundColor: 'rgba(54, 162, 235, 0.2)',
+                      borderColor: 'rgba(54, 162, 235, 0.8)',
+                      borderWidth: 2
+                    },
+                    pinch: {
+                      enabled: true
+                    },
+                    mode: 'xy'
+                  },
+                  pan: {
+                    enabled: true,
+                    mode: 'xy',
+                    modifierKey: 'shift'
+                  }
+                }
+              },
+              scales: {
+                y: {
+                  beginAtZero: true
+                }
+              }
+            }
+          });
+        }
+
+        renderThroughputChart(results) {
+          const ctx = document.getElementById('throughputChart').getContext('2d');
+          const datasets = results.map(({ filename, data }, index) => {
+            const throughput = data.throughput || {};
+            return {
+              label: filename,
+              data: Object.values(throughput),
+              borderColor: this.getColor(index),
+              backgroundColor: 'transparent',
+              fill: false,
+              tension: 0
+            };
+          });
+
+          const firstResult = results[0].data;
+          const labels = Object.keys(firstResult.throughput || {});
+
+          this.charts.throughput = new Chart(ctx, {
+            type: 'line',
+            data: { labels, datasets },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              plugins: {
+                legend: {
+                  position: 'bottom'
+                },
+                zoom: {
+                  zoom: {
+                    wheel: {
+                      enabled: false
+                    },
+                    drag: {
+                      enabled: true,
+                      modifierKey: null,
+                      backgroundColor: 'rgba(54, 162, 235, 0.2)',
+                      borderColor: 'rgba(54, 162, 235, 0.8)',
+                      borderWidth: 2
+                    },
+                    pinch: {
+                      enabled: true
+                    },
+                    mode: 'xy'
+                  },
+                  pan: {
+                    enabled: true,
+                    mode: 'xy',
+                    modifierKey: 'shift'
+                  }
+                }
+              },
+              scales: {
+                x: {
+                  title: {
+                    display: true,
+                    text: 'Time (s)'
+                  }
+                },
+                y: {
+                  beginAtZero: true,
+                  title: {
+                    display: true,
+                    text: 'Requests'
+                  }
+                }
+              }
+            }
+          });
+        }
+
+        renderHistogramChart(results) {
+          const ctx = document.getElementById('histogramChart').getContext('2d');
+          const datasets = results.map(({ filename, data }, index) => {
+            const histogram = data.histogram || {};
+            return {
+              label: filename,
+              data: Object.values(histogram),
+              backgroundColor: this.getColor(index),
+              borderWidth: 0
+            };
+          });
+
+          const firstResult = results[0].data;
+          const labels = Object.keys(firstResult.histogram || {});
+
+          this.charts.histogram = new Chart(ctx, {
+            type: 'bar',
+            data: { labels, datasets },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              plugins: {
+                legend: {
+                  position: 'bottom'
+                },
+                zoom: {
+                  zoom: {
+                    wheel: {
+                      enabled: false
+                    },
+                    drag: {
+                      enabled: true,
+                      modifierKey: null,
+                      backgroundColor: 'rgba(54, 162, 235, 0.2)',
+                      borderColor: 'rgba(54, 162, 235, 0.8)',
+                      borderWidth: 2
+                    },
+                    pinch: {
+                      enabled: true
+                    },
+                    mode: 'xy'
+                  },
+                  pan: {
+                    enabled: true,
+                    mode: 'xy',
+                    modifierKey: 'shift'
+                  }
+                }
+              },
+              scales: {
+                x: {
+                  title: {
+                    display: true,
+                    text: 'Response Time (ms)'
+                  }
+                },
+                y: {
+                  beginAtZero: true,
+                  title: {
+                    display: true,
+                    text: 'Count'
+                  }
+                }
+              }
+            }
+          });
+        }
+
+        destroyExistingCharts() {
+          Object.values(this.charts).forEach((chart) => {
+            if (chart) chart.destroy();
+          });
+          this.charts = {};
+        }
+
+        getShortName(filename) {
+          return filename.replace('.json', '').replace(/^.*?-/, '');
+        }
+
+        formatWithCommas(num) {
+          if (!num && num !== 0) return 'N/A';
+          return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+        }
+
+        getColor(index) {
+          const colors = [
+            '#0d6efd',
+            '#6c757d',
+            '#28a745',
+            '#dc3545',
+            '#ffc107',
+            '#17a2b8',
+            '#6f42c1',
+            '#fd7e14',
+            '#20c997',
+            '#e83e8c',
+            '#fd9c2c',
+            '#495057',
+            '#6610f2',
+            '#198754',
+            '#dc3545',
+            '#0dcaf0'
+          ];
+          return colors[index % colors.length];
+        }
+
+        showDashboard() {
+          document.getElementById('dashboardContent').style.display = 'block';
+        }
+
+        showError(message) {
+          const errorDiv = document.getElementById('errorMessage');
+          errorDiv.textContent = message;
+          errorDiv.style.display = 'block';
+          this.hideLoading();
+        }
+
+        showNoData() {
+          document.getElementById('noDataMessage').style.display = 'block';
+          this.hideLoading();
+        }
+
+        hideLoading() {
+          document.getElementById('loadingIndicator').style.display = 'none';
+        }
+      }
+
+      let dashboard;
+      document.addEventListener('DOMContentLoaded', () => {
+        dashboard = new Dashboard();
+      });
+    </script>
+  </body>
+</html>
